@@ -18,99 +18,126 @@ int main(void) {
     return 1;
   }
 
-  int ret;
+  return stdin_listen();
+}
+
+int stdin_listen(void) {
+  int err;
+  char *command;
   ssize_t n;
-  char *sender;
-  char *klass;
-  char *instance;
-  char *recipient;
-  char *opcode;
-  char *auth;
-  char *message_length;
-  char *message;
 
-  for (int cont = 1; cont;) {
-    ret = 0;
-    cont = 0;
-
-    ssize_t s;
+  for (;;) {
+    command = NULL;
     n = 0;
-    if ((s = getdelim(&sender, &s, 0, stdin)) == -1) {
+    if (getdelim(&command, &n, 0, stdin) < 0) {
+      return 0;
+    }
+    if (strcmp(command, "zwrite") == 0) {
+      free(command);
+      if (!zwrite_listen(&err)) {
+        if (err == ZERR_NONE) {
+          return 0;
+        }
+        com_err("zpipe", err, "in zwrite");
+        return 1;
+      }
       continue;
     }
-    if (s <= 1) {
-      free(sender);
-      sender = ZGetSender();
-    }
-    n = 0;
-    if (getdelim(&klass, &n, 0, stdin) == -1) {
-      goto free_sender;
-    }
-    n = 0;
-    if (getdelim(&instance, &n, 0, stdin) == -1) {
-      goto free_klass;
-    }
-    n = 0;
-    if (getdelim(&recipient, &n, 0, stdin) == -1) {
-      goto free_instance;
-    }
-    n = 0;
-    if (getdelim(&opcode, &n, 0, stdin) == -1) {
-      goto free_recipient;
-    }
-    n = 0;
-    if (getdelim(&auth, &n, 0, stdin) == -1) {
-      goto free_opcode;
-    }
-    n = 0;
-    if (getdelim(&message_length, &n, 0, stdin) == -1) {
-      goto free_auth;
-    }
-    int mlen = atoi(message_length);
-    if (mlen) {
-      if (!(message = malloc(mlen))) {
-        goto free_message_length;
-      }
-      if (!(fgets(message, mlen + 1, stdin))) {
-        goto free_all;
-      }
-    }
-    else {
-      message = "";
-    }
+    free(command);
+    fprintf(stderr, "unknown command\n");
+    return 1;
+  }
+}
 
-    if ((status = zwrite(sender, klass, instance,
-                         recipient, opcode, mlen, message,
-                         atoi(auth))) != ZERR_NONE) {
-      com_err("zpipe", status, "during zwrite");
-      ret = 1;
-      cont = 0;
-      goto free_all;
-    }
+int zwrite_listen(int *err) {
+  int ret;
+  ssize_t n;
+  char *sender = NULL;
+  char *klass = NULL;
+  char *instance = NULL;
+  char *recipient = NULL;
+  char *opcode = NULL;
+  char *auth = NULL;
+  char *message_length = NULL;
+  char *message;
 
-  free_all:
-  free_message:
-    if (mlen) {
-      free(message);
+  ret = 0;
+  *err = ZERR_NONE;
+
+  ssize_t s;
+  n = 0;
+  if ((s = getdelim(&sender, &n, 0, stdin)) == -1) {
+    goto done_freeing;
+  }
+  if (s <= 1) {
+    free(sender);
+    sender = ZGetSender();
+  }
+  n = 0;
+  if (getdelim(&klass, &n, 0, stdin) == -1) {
+    goto free_sender;
+  }
+  n = 0;
+  if (getdelim(&instance, &n, 0, stdin) == -1) {
+    goto free_klass;
+  }
+  n = 0;
+  if (getdelim(&recipient, &n, 0, stdin) == -1) {
+    goto free_instance;
+  }
+  n = 0;
+  if (getdelim(&opcode, &n, 0, stdin) == -1) {
+    goto free_recipient;
+  }
+  n = 0;
+  if (getdelim(&auth, &n, 0, stdin) == -1) {
+    goto free_opcode;
+  }
+  n = 0;
+  if (getdelim(&message_length, &n, 0, stdin) == -1) {
+    goto free_auth;
+  }
+  int mlen = atoi(message_length);
+  if (mlen) {
+    if (!(message = malloc(mlen))) {
+      goto free_message_length;
     }
-  free_message_length:
-    free(message_length);
-  free_auth:
-    free(auth);
-  free_opcode:
-    free(opcode);
-  free_recipient:
-    free(recipient);
-  free_instance:
-    free(instance);
-  free_klass:
-    free(klass);
-  free_sender:
-    if (s) {
-      free(sender);
+    if (!(fgets(message, mlen + 1, stdin))) {
+      goto free_message;
     }
   }
+  else {
+    message = "";
+  }
 
+  if ((*err = zwrite(sender, klass, instance,
+                     recipient, opcode, mlen, message,
+                     atoi(auth))) == ZERR_NONE) {
+    ret = 1;
+  }
+
+ free_message:
+  if (mlen) {
+    free(message);
+  }
+ free_message_length:
+  free(message_length);
+ free_auth:
+  free(auth);
+ free_opcode:
+  free(opcode);
+ free_recipient:
+  free(recipient);
+ free_instance:
+  free(instance);
+ free_klass:
+  free(klass);
+ free_sender:
+  if (s) {
+    free(sender);
+  }
+
+ done_freeing:
   return ret;
 }
 
