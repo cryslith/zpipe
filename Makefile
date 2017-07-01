@@ -3,4 +3,4 @@
 all: zpipe
 
 zpipe: zpipe.c
-	c99 -DKERBEROS $< -lzephyr -lcom_err -o $@
+	c99 -Werror -DKERBEROS $< -lzephyr -lcom_err -o $@

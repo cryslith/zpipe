@@ -1,4 +1,4 @@
-int stdin_loop(void);
+int receive_stdin(int *cont);
 Code_t receive_zwrite(int *err);
 Code_t zwrite(char *sender, char *klass, char *instance,
               char *recipient, char *opcode,

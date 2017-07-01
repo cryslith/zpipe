@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <error.h>
+#include <errno.h>
+#include <sys/select.h>
 
 #include <com_err.h>
 #include <zephyr/zephyr.h>
@@ -16,6 +20,10 @@
       return 1;                                   \
     }                                             \
   } while (0)
+
+int max(int a, int b) {
+  return (a > b) ? a : b;
+}
 
 
 int main(void) {
@@ -31,46 +39,74 @@ int main(void) {
   ex_subs[0].zsub_recipient = "ikdc@ATHENA.MIT.EDU";
   CHECK_ZERR(ZSubscribeToSansDefaults(ex_subs, 1, 0));
 
-  int nsubs;
-  ZSubscription_t *subs;
-
-  CHECK_ZERR(ZRetrieveSubscriptions(0, &nsubs));
-  subs = malloc(sizeof(ZSubscription_t) * nsubs);
-  CHECK_ZERR(ZGetSubscriptions(subs, &nsubs));
-  for (int i = 0; i < nsubs; i++) {
-    printf("(%s, %s, %s)\n", subs[i].zsub_class, subs[i].zsub_classinst, subs[i].zsub_recipient);
-  }
-  free(subs);
-
-  // TODO branch
-  return notice_loop();
-  return stdin_loop();
-}
-
-int stdin_loop(void) {
-  int cont;
-  char *command;
-  ssize_t n;
+  int zfd = ZGetFD();
+  int infd = STDIN_FILENO;
+  int maxfd = -1;
+  int r;
+  fd_set readfds;
 
   for (;;) {
-    command = NULL;
-    n = 0;
-    if (getdelim(&command, &n, 0, stdin) < 0) {
+    FD_ZERO(&readfds);
+    if (zfd >= 0) {
+      FD_SET(zfd, &readfds);
+      maxfd = max(maxfd, zfd);
+    }
+    if (infd >= 0) {
+      FD_SET(infd, &readfds);
+      maxfd = max(maxfd, infd);
+    }
+    if (maxfd < 0) {
       return 0;
     }
-    if (strcmp(command, "zwrite") == 0) {
-      free(command);
-      CHECK_ZERR(receive_zwrite(&cont));
-      if (cont) {
-        continue;
-      }
-      break;
+    if ((r = select(maxfd + 1, &readfds, NULL, NULL, NULL)) < 0) {
+      error(1, errno, "select");
     }
-    // TODO subscribe and unsubscribe
+    if (FD_ISSET(infd, &readfds)) {
+      int cont;
+      if ((r = receive_stdin(&cont)) != 0) {
+        return r;
+      }
+      if (!cont) {
+        close(infd);
+        infd = -1;
+      }
+    }
+    if (FD_ISSET(zfd, &readfds)) {
+      CHECK_ZERR(receive_notice());
+    }
+  }
+}
+
+int receive_stdin(int *cont) {
+  char *command = NULL;
+  ssize_t n = 0;
+
+  *cont = 0;
+  if (getdelim(&command, &n, 0, stdin) < 0) {
+    return 0;
+  }
+  if (strcmp(command, "zwrite") == 0) {
     free(command);
-    fprintf(stderr, "unknown command\n");
+    CHECK_ZERR(receive_zwrite(cont));
+    *cont = 1;
+    return 0;
+  }
+  if (strcmp(command, "subscribe") == 0) {
+    free(command);
+    // TODO
+    fprintf(stderr, "not implemented\n");
     return 1;
   }
+  if (strcmp(command, "unsubscribe") == 0) {
+    free(command);
+    // TODO
+    fprintf(stderr, "not implemented\n");
+    return 1;
+  }
+
+  free(command);
+  fprintf(stderr, "unknown command\n");
+  return 1;
 }
 
 Code_t receive_zwrite(int *cont) {
@@ -184,12 +220,6 @@ Code_t zwrite(char *sender, char *klass, char *instance,
   notice.z_message = message;
 
   return ZSendNotice(&notice, auth ? ZAUTH : ZNOAUTH);
-}
-
-int notice_loop(void) {
-  for (;;) {
-    CHECK_ZERR(receive_notice());
-  }
 }
 
 Code_t receive_notice(void) {
