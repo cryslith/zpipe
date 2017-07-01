@@ -1,7 +1,9 @@
-int zwrite(char *sender, char *klass, char *instance,
-           char *recipient, char *opcode,
-           int message_len, char *message, int auth);
+int stdin_loop(void);
+Code_t receive_zwrite(int *err);
+Code_t zwrite(char *sender, char *klass, char *instance,
+              char *recipient, char *opcode,
+              int message_len, char *message, int auth);
 
-int zwrite_listen(int *err);
-
-int stdin_listen(void);
+int notice_loop(void);
+Code_t receive_notice(void);
+Code_t process_notice(ZNotice_t *notice, struct sockaddr_in *from);
