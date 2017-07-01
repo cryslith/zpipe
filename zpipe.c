@@ -9,20 +9,22 @@
 
 #include "zpipe.h"
 
+#define CHECK_ZERR(X) do {                        \
+    Code_t status = X;                            \
+    if (status != ZERR_NONE) {                    \
+      com_err("zpipe", status, #X);               \
+    }                                             \
+  } while (0)
+
 
 int main(void) {
-  int status;
-
-  if ((status = ZInitialize()) != ZERR_NONE) {
-    com_err("zpipe", status, "while initializing");
-    return 1;
-  }
+  CHECK_ZERR(ZInitialize());
 
   return stdin_listen();
 }
 
 int stdin_listen(void) {
-  int err;
+  int cont;
   char *command;
   ssize_t n;
 
@@ -34,14 +36,11 @@ int stdin_listen(void) {
     }
     if (strcmp(command, "zwrite") == 0) {
       free(command);
-      if (!zwrite_listen(&err)) {
-        if (err == ZERR_NONE) {
-          return 0;
-        }
-        com_err("zpipe", err, "in zwrite");
-        return 1;
+      CHECK_ZERR(zwrite_listen(&cont));
+      if (cont) {
+        continue;
       }
-      continue;
+      break;
     }
     free(command);
     fprintf(stderr, "unknown command\n");
@@ -49,8 +48,7 @@ int stdin_listen(void) {
   }
 }
 
-int zwrite_listen(int *err) {
-  int ret;
+Code_t zwrite_listen(int *cont) {
   ssize_t n;
   char *sender = NULL;
   char *klass = NULL;
@@ -61,8 +59,8 @@ int zwrite_listen(int *err) {
   char *message_length = NULL;
   char *message;
 
-  ret = 0;
-  *err = ZERR_NONE;
+  Code_t err = ZERR_NONE;
+  *cont = 0;
 
   ssize_t s;
   n = 0;
@@ -110,10 +108,10 @@ int zwrite_listen(int *err) {
     message = "";
   }
 
-  if ((*err = zwrite(sender, klass, instance,
-                     recipient, opcode, mlen, message,
-                     atoi(auth))) == ZERR_NONE) {
-    ret = 1;
+  if ((err = zwrite(sender, klass, instance,
+                    recipient, opcode, mlen, message,
+                    atoi(auth))) == ZERR_NONE) {
+    *cont = 1;
   }
 
  free_message:
@@ -138,12 +136,12 @@ int zwrite_listen(int *err) {
   }
 
  done_freeing:
-  return ret;
+  return err;
 }
 
-int zwrite(char *sender, char *klass, char *instance,
-           char *recipient, char *opcode,
-           int message_len, char *message, int auth) {
+Code_t zwrite(char *sender, char *klass, char *instance,
+              char *recipient, char *opcode,
+              int message_len, char *message, int auth) {
   ZNotice_t notice;
   memset((void *) &notice, 0, sizeof(notice));
 
