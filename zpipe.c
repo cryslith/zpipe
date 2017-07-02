@@ -223,7 +223,6 @@ Code_t zwrite(char *sender, char *klass, char *instance,
 }
 
 Code_t receive_notice(void) {
-  printf("waiting...\n");
   ZNotice_t notice;
   struct sockaddr_in from;
   Code_t status;
@@ -238,24 +237,18 @@ Code_t process_notice(ZNotice_t *notice, struct sockaddr_in *from) {
       notice->z_kind == UNACKED ||
       notice->z_kind == ACKED) {
     Code_t authed = ZCheckAuthentication(notice, from);
-    if (authed == ZAUTH_NO) {
-      printf("auth: no\n");
-    }
-    else if (authed == ZAUTH_YES) {
-      printf("auth: yes\n");
-    }
-    else {
-      printf("auth: failed\n");
-    }
 
-    printf("time: %u:%u\n", notice->z_time.tv_sec, notice->z_time.tv_usec);
-    printf("sender: %s\n", notice->z_sender);
-    printf("class: %s\n", notice->z_class);
-    printf("instance: %s\n", notice->z_class_inst);
-    printf("recipient: %s\n", notice->z_recipient);
-    printf("opcode: %s\n", notice->z_opcode);
-    printf("message len: %u\n", notice->z_message_len);
-    printf("message: %s\n", notice->z_message);
+    fprintf(stdout,
+            "notice%c%s%c%s%c%s%c%s%c%s%c%u%c%u%c", 0,
+            notice->z_sender, 0,
+            notice->z_class, 0,
+            notice->z_class_inst, 0,
+            notice->z_recipient, 0,
+            notice->z_opcode, 0,
+            authed == ZAUTH_YES, 0,
+            notice->z_message_len, 0);
+    fwrite(notice->z_message, 1, notice->z_message_len, stdout);
+    fflush(stdout);
   }
   ZFreeNotice(notice);
 
