@@ -12,6 +12,7 @@
 #include <zephyr/zephyr.h>
 
 #include "zpipe.h"
+#include "util.h"
 
 #define CHECK_ZERR(X) do {                        \
     Code_t status = X;                            \
@@ -21,32 +22,21 @@
     }                                             \
   } while (0)
 
-int max(int a, int b) {
-  return (a > b) ? a : b;
-}
-
 
 int main(void) {
+  int r;
+
   CHECK_ZERR(ZInitialize());
 
-  ZSubscription_t ex_subs[1];
-  ex_subs[0].zsub_class = "ikdc-test";
-  ex_subs[0].zsub_classinst = "*";
-  ex_subs[0].zsub_recipient = "*";
-  CHECK_ZERR(ZSubscribeToSansDefaults(ex_subs, 1, 0));
-  ex_subs[0].zsub_class = "message";
-  ex_subs[0].zsub_classinst = "zpipe";
-  ex_subs[0].zsub_recipient = "ikdc@ATHENA.MIT.EDU";
-  CHECK_ZERR(ZSubscribeToSansDefaults(ex_subs, 1, 0));
+  CHECK_ZERR(ZSubscribeToSansDefaults(NULL, 0, 0));
 
   int zfd = ZGetFD();
   int infd = STDIN_FILENO;
-  int maxfd = -1;
-  int r;
+  int maxfd;
   fd_set readfds;
-
-  for (;;) {
+  for (int i = 0;;i++) {
     FD_ZERO(&readfds);
+    maxfd = -1;
     if (zfd >= 0) {
       FD_SET(zfd, &readfds);
       maxfd = max(maxfd, zfd);
@@ -62,13 +52,19 @@ int main(void) {
       error(1, errno, "select");
     }
     if (FD_ISSET(infd, &readfds)) {
-      int cont;
-      if ((r = receive_stdin(&cont)) != 0) {
+      fprintf(stderr, "infd\n");
+      int cont, close_zephyr;
+      if ((r = receive_stdin(&cont, &close_zephyr)) != 0) {
         return r;
       }
       if (!cont) {
         close(infd);
         infd = -1;
+      }
+      if (close_zephyr) {
+        CHECK_ZERR(ZCancelSubscriptions(0));
+        zfd = -1;
+        fclose(stdout);
       }
     }
     if (FD_ISSET(zfd, &readfds)) {
@@ -77,31 +73,42 @@ int main(void) {
   }
 }
 
-int receive_stdin(int *cont) {
+int receive_stdin(int *cont, int *close_zephyr) {
   char *command = NULL;
-  ssize_t n = 0;
-
   *cont = 0;
-  if (getdelim(&command, &n, 0, stdin) < 0) {
+  *close_zephyr = 0;
+
+  ssize_t n = 0;
+  ssize_t r;
+  if (getdelim_unbuf(&command, &n, 0, STDIN_FILENO) < 0) {
+    fprintf(stderr, "error reading command\n");
+    return 1;
+  }
+  if (strlen(command) == 0) {
+    // empty command
     return 0;
   }
+
   if (strcmp(command, "zwrite") == 0) {
     free(command);
     CHECK_ZERR(receive_zwrite(cont));
-    *cont = 1;
     return 0;
   }
   if (strcmp(command, "subscribe") == 0) {
     free(command);
-    // TODO
-    fprintf(stderr, "not implemented\n");
-    return 1;
+    CHECK_ZERR(receive_subscription(cont, 0));
+    return 0;
   }
   if (strcmp(command, "unsubscribe") == 0) {
     free(command);
-    // TODO
-    fprintf(stderr, "not implemented\n");
-    return 1;
+    CHECK_ZERR(receive_subscription(cont, 1));
+    return 0;
+  }
+  if (strcmp(command, "close_zephyr") == 0) {
+    free(command);
+    *close_zephyr = 1;
+    *cont = 1;
+    return 0;
   }
 
   free(command);
@@ -111,6 +118,7 @@ int receive_stdin(int *cont) {
 
 Code_t receive_zwrite(int *cont) {
   ssize_t n;
+  char *charset = NULL;
   char *sender = NULL;
   char *klass = NULL;
   char *instance = NULL;
@@ -123,37 +131,41 @@ Code_t receive_zwrite(int *cont) {
   Code_t err = ZERR_NONE;
   *cont = 0;
 
+  n = 0;
+  if (getdelim_unbuf(&charset, &n, 0, STDIN_FILENO) == -1) {
+    goto done_freeing;
+  }
   ssize_t s;
   n = 0;
-  if ((s = getdelim(&sender, &n, 0, stdin)) == -1) {
-    goto done_freeing;
+  if ((s = getdelim_unbuf(&sender, &n, 0, STDIN_FILENO)) == -1) {
+    goto free_charset;
   }
   if (s <= 1) {
     free(sender);
     sender = ZGetSender();
   }
   n = 0;
-  if (getdelim(&klass, &n, 0, stdin) == -1) {
+  if (getdelim_unbuf(&klass, &n, 0, STDIN_FILENO) == -1) {
     goto free_sender;
   }
   n = 0;
-  if (getdelim(&instance, &n, 0, stdin) == -1) {
+  if (getdelim_unbuf(&instance, &n, 0, STDIN_FILENO) == -1) {
     goto free_klass;
   }
   n = 0;
-  if (getdelim(&recipient, &n, 0, stdin) == -1) {
+  if (getdelim_unbuf(&recipient, &n, 0, STDIN_FILENO) == -1) {
     goto free_instance;
   }
   n = 0;
-  if (getdelim(&opcode, &n, 0, stdin) == -1) {
+  if (getdelim_unbuf(&opcode, &n, 0, STDIN_FILENO) == -1) {
     goto free_recipient;
   }
   n = 0;
-  if (getdelim(&auth, &n, 0, stdin) == -1) {
+  if (getdelim_unbuf(&auth, &n, 0, STDIN_FILENO) == -1) {
     goto free_opcode;
   }
   n = 0;
-  if (getdelim(&message_length, &n, 0, stdin) == -1) {
+  if (getdelim_unbuf(&message_length, &n, 0, STDIN_FILENO) == -1) {
     goto free_auth;
   }
   int mlen = atoi(message_length);
@@ -161,7 +173,7 @@ Code_t receive_zwrite(int *cont) {
     if (!(message = malloc(mlen))) {
       goto free_message_length;
     }
-    if (!(fgets(message, mlen + 1, stdin))) {
+    if (read_all(STDIN_FILENO, message, mlen) < mlen) {
       goto free_message;
     }
   }
@@ -169,7 +181,8 @@ Code_t receive_zwrite(int *cont) {
     message = "";
   }
 
-  if ((err = zwrite(sender, klass, instance,
+  if ((err = zwrite(ZGetCharset(charset),
+                    sender, klass, instance,
                     recipient, opcode, mlen, message,
                     atoi(auth))) == ZERR_NONE) {
     *cont = 1;
@@ -192,15 +205,18 @@ Code_t receive_zwrite(int *cont) {
  free_klass:
   free(klass);
  free_sender:
-  if (s) {
+  if (s > 1) {
     free(sender);
   }
+ free_charset:
+  free(charset);
 
  done_freeing:
   return err;
 }
 
-Code_t zwrite(char *sender, char *klass, char *instance,
+Code_t zwrite(unsigned short charset,
+              char *sender, char *klass, char *instance,
               char *recipient, char *opcode,
               int message_len, char *message, int auth) {
   ZNotice_t notice;
@@ -209,7 +225,7 @@ Code_t zwrite(char *sender, char *klass, char *instance,
   notice.z_kind = UNACKED;
   notice.z_port = 0;
   notice.z_default_format = "http://mit.edu/df";
-  notice.z_charset = ZCHARSET_UTF_8;
+  notice.z_charset = charset;
 
   notice.z_sender = sender;
   notice.z_class = klass;
@@ -220,6 +236,64 @@ Code_t zwrite(char *sender, char *klass, char *instance,
   notice.z_message = message;
 
   return ZSendNotice(&notice, auth ? ZAUTH : ZNOAUTH);
+}
+
+Code_t receive_subscription(int *cont, int unsub) {
+  ssize_t n;
+  char *klass = NULL;
+  char *instance = NULL;
+  char *recipient = NULL;
+
+  Code_t err = ZERR_NONE;
+  *cont = 0;
+
+  n = 0;
+  if (getdelim_unbuf(&klass, &n, 0, STDIN_FILENO) == -1) {
+    goto done_freeing;
+  }
+  n = 0;
+  if (getdelim_unbuf(&instance, &n, 0, STDIN_FILENO) == -1) {
+    goto free_klass;
+  }
+  n = 0;
+  if (getdelim_unbuf(&recipient, &n, 0, STDIN_FILENO) == -1) {
+    goto free_instance;
+  }
+
+  if (unsub) {
+    err = unsubscribe(klass, instance, recipient);
+  }
+  else {
+    err = subscribe(klass, instance, recipient);
+  }
+  if (err == ZERR_NONE) {
+    *cont = 1;
+  }
+
+  free(recipient);
+ free_instance:
+  free(instance);
+ free_klass:
+  free(klass);
+
+ done_freeing:
+  return err;
+}
+
+Code_t subscribe(char *klass, char *instance, char *recipient) {
+  ZSubscription_t sub;
+  sub.zsub_class = klass;
+  sub.zsub_classinst = instance;
+  sub.zsub_recipient = recipient;
+  return ZSubscribeToSansDefaults(&sub, 1, 0);
+}
+
+Code_t unsubscribe(char *klass, char *instance, char *recipient) {
+  ZSubscription_t sub;
+  sub.zsub_class = klass;
+  sub.zsub_classinst = instance;
+  sub.zsub_recipient = recipient;
+  return ZUnsubscribeTo(&sub, 1, 0);
 }
 
 Code_t receive_notice(void) {
@@ -239,7 +313,9 @@ Code_t process_notice(ZNotice_t *notice, struct sockaddr_in *from) {
     Code_t authed = ZCheckAuthentication(notice, from);
 
     fprintf(stdout,
-            "notice%c%s%c%s%c%s%c%s%c%s%c%u%c%u%c", 0,
+            "notice%c%s%c%u:%u%c%s%c%s%c%s%c%s%c%s%c%u%c%u%c", 0,
+            ZCharsetToString(notice->z_charset), 0,
+            notice->z_time.tv_sec, notice->z_time.tv_usec, 0,
             notice->z_sender, 0,
             notice->z_class, 0,
             notice->z_class_inst, 0,
