@@ -52,7 +52,6 @@ int main(void) {
       error(1, errno, "select");
     }
     if (FD_ISSET(infd, &readfds)) {
-      fprintf(stderr, "infd\n");
       int cont, close_zephyr;
       if ((r = receive_stdin(&cont, &close_zephyr)) != 0) {
         return r;

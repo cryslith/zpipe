@@ -179,37 +179,15 @@ class Zephyrgram(object):
                        time=time)
 
 
-def zpipe_listen_notice(out, notice_handler):
-    while True:
-        typ = out.readuntil(0)
-        if typ == b'notice':
-            notice_handler(ZNotice.from_zpipe(out))
-        else:
-            break
-
-
-def zpipe_listen_zgram(out, zgram_handler):
-    while True:
-        typ = out.readuntil(0)
-        if typ == b'notice':
-            try:
-                zgram = ZNotice.from_zpipe(out).to_zephyrgram()
-            except ValueError:
-                continue
-            zgram_handler(zgram)
-        else:
-            break
-
-
 class ZPipe(object):
     def __init__(self, args, handler, raw=False):
         self.handler = handler
         self.raw = raw
         self.zpipe = Popen(args, stdin=PIPE, stdout=PIPE)
         self.zpipe_out = ReadUntil(self.zpipe.stdout)
-        target = zpipe_listen_notice if raw else zpipe_listen_zgram
+        target = self.zpipe_listen_notice if raw else self.zpipe_listen_zgram
         self.stdout_thread = threading.Thread(target=target,
-                                              args=(self.zpipe_out, handler))
+                                              args=(handler,))
         self.stdout_thread.start()
         self.zephyr_closed = False
 
@@ -241,6 +219,25 @@ class ZPipe(object):
 
     def close_zephyr(self):
         self.zephyr_closed = True
-        print(self.zpipe.stdin.write(b'close_zephyr\x00'))
+        self.zpipe.stdin.write(b'close_zephyr\x00')
         self.zpipe.stdin.flush()
-        print('closing zephyr')
+
+    def zpipe_listen_notice(self, notice_handler):
+        while True:
+            typ = self.zpipe_out.readuntil(0)
+            if typ == b'notice':
+                notice_handler(self, ZNotice.from_zpipe(self.zpipe_out))
+            else:
+                break
+
+    def zpipe_listen_zgram(self, zgram_handler):
+        while True:
+            typ = self.zpipe_out.readuntil(0)
+            if typ == b'notice':
+                try:
+                    zgram = ZNotice.from_zpipe(self.zpipe_out).to_zephyrgram()
+                except ValueError:
+                    continue
+                zgram_handler(self, zgram)
+            else:
+                break
