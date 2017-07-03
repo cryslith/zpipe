@@ -5,7 +5,7 @@ from zpipe import ZPipe, Zephyrgram
 
 
 def main():
-    zp = ZPipe(['./zpipe'], print)
+    zp = ZPipe(['../zpipe'], print)
     zp.subscribe('zpipe-example', 'example')
     for i in range(3):
         text = input('enter a message ({}/3) > '.format(i + 1))
