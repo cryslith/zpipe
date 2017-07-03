@@ -1,6 +1,6 @@
 from subprocess import Popen, PIPE
 from io import DEFAULT_BUFFER_SIZE
-import threading
+from threading import Thread, Lock
 
 
 class ReadUntil(object):
@@ -163,8 +163,8 @@ class Zephyrgram(object):
         if self.time is None:
             time = None
         else:
-            time = bytes([int(self.time), ord(':'),
-                          int((self.time % 1) * 1000000)])
+            time = b':'.join(str(int(x)).encode() for x in
+                             [self.time, self.time % 1 * 1000000])
 
         return ZNotice(b'UTF-8',
                        None if self.sender is None else
@@ -186,15 +186,19 @@ class ZPipe(object):
         self.zpipe = Popen(args, stdin=PIPE, stdout=PIPE)
         self.zpipe_out = ReadUntil(self.zpipe.stdout)
         target = self.zpipe_listen_notice if raw else self.zpipe_listen_zgram
-        self.stdout_thread = threading.Thread(target=target,
-                                              args=(handler,))
+        self.stdout_thread = Thread(target=target, args=(handler,))
         self.stdout_thread.start()
         self.zephyr_closed = False
+        self.stdin_lock = Lock()
 
     def zwrite_notice(self, notice):
-        self.zpipe.stdin.write(b'zwrite\x00')
-        self.zpipe.stdin.write(notice.to_zpipe())
-        self.zpipe.stdin.flush()
+        self.stdin_lock.acquire()
+        try:
+            self.zpipe.stdin.write(b'zwrite\x00')
+            self.zpipe.stdin.write(notice.to_zpipe())
+            self.zpipe.stdin.flush()
+        finally:
+            self.stdin_lock.release()
 
     def zwrite(self, zgram):
         self.zwrite_notice(zgram.to_znotice())
@@ -208,25 +212,37 @@ class ZPipe(object):
             instance = instance.encode()
         if isinstance(recipient, str):
             recipient = recipient.encode()
-        self.zpipe.stdin.write(
-            b''.join(x + b'\x00' for x in
-                     (b'unsubscribe' if unsub else b'subscribe',
-                      cls, instance, recipient)))
-        self.zpipe.stdin.flush()
+        self.stdin_lock.acquire()
+        try:
+            self.zpipe.stdin.write(
+                b''.join(x + b'\x00' for x in
+                         (b'unsubscribe' if unsub else b'subscribe',
+                          cls, instance, recipient)))
+            self.zpipe.stdin.flush()
+        finally:
+            self.stdin_lock.release()
 
     def unsubscribe(self, *args):
         self.subscribe(*args, unsub=True)
 
     def close_zephyr(self):
+        if self.zephyr_closed:
+            return
         self.zephyr_closed = True
-        self.zpipe.stdin.write(b'close_zephyr\x00')
-        self.zpipe.stdin.flush()
+        self.stdin_lock.acquire()
+        try:
+            self.zpipe.stdin.write(b'close_zephyr\x00')
+            self.zpipe.stdin.flush()
+        finally:
+            self.stdin_lock.release()
 
     def zpipe_listen_notice(self, notice_handler):
         while True:
             typ = self.zpipe_out.readuntil(0)
             if typ == b'notice':
-                notice_handler(self, ZNotice.from_zpipe(self.zpipe_out))
+                t = Thread(target=notice_handler,
+                           args=(self, ZNotice.from_zpipe(self.zpipe_out)))
+                t.start()
             else:
                 break
 
@@ -238,6 +254,7 @@ class ZPipe(object):
                     zgram = ZNotice.from_zpipe(self.zpipe_out).to_zephyrgram()
                 except ValueError:
                     continue
-                zgram_handler(self, zgram)
+                t = Thread(target=zgram_handler, args=(self, zgram))
+                t.start()
             else:
                 break

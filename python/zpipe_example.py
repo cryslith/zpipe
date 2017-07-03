@@ -4,8 +4,22 @@
 from zpipe import ZPipe, Zephyrgram
 
 
+repeated = False
+def repeat(zp, zgram):
+    global repeated
+    print(zgram)
+    if repeated:
+        return
+    repeated = True
+    if zgram.opcode == 'repeat':
+        return
+
+    zgram.opcode = 'repeat'
+    zp.zwrite(zgram)
+
+
 def main():
-    zp = ZPipe(['../zpipe'], lambda p, z: print(z))
+    zp = ZPipe(['../zpipe'], repeat)
     zp.subscribe('zpipe-example', 'example')
     for i in range(3):
         text = input('enter a message ({}/3) > '.format(i + 1))
