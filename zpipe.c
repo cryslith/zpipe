@@ -270,7 +270,7 @@ Code_t receive_subscription(int *cont, int should_sub) {
   else {
     fprintf(stderr, "subscription attempt failed: (%s, %s, %s)\n",
             klass, instance, recipient);
-    return 1;
+    return ZERR_SERVNAK;
   }
 
  free_recipient:
