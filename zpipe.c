@@ -43,17 +43,15 @@ typedef struct _arg {
   char *arg_value;
 } _arg, *arg;
 
-void arg_list_free(list l) {
-  list lc = l;
+void arg_list_free(list args) {
   arg a;
-  while (lc != nil) {
-    a = head(lc);
+  for (list l = args; l != nil; l = tail(l)) {
+    a = head(l);
     free(a->arg_key);
     free(a->arg_value);
     free(a);
-    lc = tail(lc);
   }
-  list_free(l);
+  list_free(args);
 }
 
 
@@ -100,12 +98,11 @@ list collect_arguments(int *error) {
   }
 }
 
-void debug_arguments(list l) {
+void debug_arguments(list args) {
   arg a;
-  while (l != nil) {
+  for (list l = args; l != nil; l = tail(l)) {
     a = head(l);
     fprintf(stderr, "%s: %s\n", a->arg_key, a->arg_value);
-    l = tail(l);
   }
 }
 

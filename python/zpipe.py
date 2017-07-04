@@ -110,7 +110,6 @@ class ZNotice(object):
                            str(len(self.message)).encode())]) +
                 b'\x00' + self.message)
 
-
     @classmethod
     def from_zpipe(C, f):
         d = {}
@@ -205,13 +204,10 @@ class ZPipe(object):
         self.stdin_lock = Lock()
 
     def zwrite_notice(self, notice):
-        self.stdin_lock.acquire()
-        try:
+        with self.stdin_lock:
             self.zpipe.stdin.write(b'command\x00zwrite\x00\x00')
             self.zpipe.stdin.write(notice.to_zpipe())
             self.zpipe.stdin.flush()
-        finally:
-            self.stdin_lock.release()
 
     def zwrite(self, zgram):
         self.zwrite_notice(zgram.to_znotice())
@@ -225,8 +221,7 @@ class ZPipe(object):
             instance = instance.encode()
         if isinstance(recipient, str):
             recipient = recipient.encode()
-        self.stdin_lock.acquire()
-        try:
+        with self.stdin_lock:
             self.zpipe.stdin.write(b'command\x00')
             self.zpipe.stdin.write(b'unsubscribe' if unsub else b'subscribe')
             self.zpipe.stdin.write(b'\x00\x00')
@@ -238,8 +233,6 @@ class ZPipe(object):
                           (b'recipient', recipient)]))
             self.zpipe.stdin.write(b'\x00')
             self.zpipe.stdin.flush()
-        finally:
-            self.stdin_lock.release()
 
     def unsubscribe(self, *args):
         self.subscribe(*args, unsub=True)
@@ -248,12 +241,9 @@ class ZPipe(object):
         if self.zephyr_closed:
             return
         self.zephyr_closed = True
-        self.stdin_lock.acquire()
-        try:
+        with self.stdin_lock:
             self.zpipe.stdin.write(b'command\x00close_zephyr\x00\x00')
             self.zpipe.stdin.flush()
-        finally:
-            self.stdin_lock.release()
 
     def zpipe_listen_notice(self, notice_handler):
         while True:
