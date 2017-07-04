@@ -95,12 +95,12 @@ int receive_stdin(int *cont, int *close_zephyr) {
   }
   if (strcmp(command, "subscribe") == 0) {
     free(command);
-    CHECK_ZERR(receive_subscription(cont, 0));
+    CHECK_ZERR(receive_subscription(cont, 1));
     return 0;
   }
   if (strcmp(command, "unsubscribe") == 0) {
     free(command);
-    CHECK_ZERR(receive_subscription(cont, 1));
+    CHECK_ZERR(receive_subscription(cont, 0));
     return 0;
   }
   if (strcmp(command, "close_zephyr") == 0) {
@@ -237,7 +237,7 @@ Code_t zwrite(unsigned short charset,
   return ZSendNotice(&notice, auth ? ZAUTH : ZNOAUTH);
 }
 
-Code_t receive_subscription(int *cont, int unsub) {
+Code_t receive_subscription(int *cont, int should_sub) {
   ssize_t n;
   char *klass = NULL;
   char *instance = NULL;
@@ -259,16 +259,21 @@ Code_t receive_subscription(int *cont, int unsub) {
     goto free_instance;
   }
 
-  if (unsub) {
-    err = unsubscribe(klass, instance, recipient);
+  int success = 0;
+  if ((err = subscribe(klass, instance, recipient, should_sub, &success))
+      != ZERR_NONE) {
+    goto free_recipient;
   }
-  else {
-    err = subscribe(klass, instance, recipient);
-  }
-  if (err == ZERR_NONE) {
+  if (success) {
     *cont = 1;
   }
+  else {
+    fprintf(stderr, "subscription attempt failed: (%s, %s, %s)\n",
+            klass, instance, recipient);
+    return 1;
+  }
 
+ free_recipient:
   free(recipient);
  free_instance:
   free(instance);
@@ -279,20 +284,74 @@ Code_t receive_subscription(int *cont, int unsub) {
   return err;
 }
 
-Code_t subscribe(char *klass, char *instance, char *recipient) {
+Code_t subscribe(char *klass, char *instance, char *recipient, int should_sub,
+                 int *success) {
   ZSubscription_t sub;
+  Code_t r;
   sub.zsub_class = klass;
   sub.zsub_classinst = instance;
   sub.zsub_recipient = recipient;
-  return ZSubscribeToSansDefaults(&sub, 1, 0);
+  if ((r = (should_sub ? ZSubscribeToSansDefaults(&sub, 1, 0) :
+            ZUnsubscribeTo(&sub, 1, 0))) != ZERR_NONE) {
+    return r;
+  }
+  int have_sub = 1;
+  if ((r = ensure_subscription(klass, instance, recipient, &have_sub)) !=
+      ZERR_NONE) {
+    return r;
+  }
+  *success = (!have_sub) == (!should_sub);
+  return ZERR_NONE;
 }
 
-Code_t unsubscribe(char *klass, char *instance, char *recipient) {
+Code_t debug_subscriptions() {
+  int n;
+  Code_t r;
+  if ((r = ZRetrieveSubscriptions(0, &n)) != ZERR_NONE) {
+    return r;
+  }
   ZSubscription_t sub;
-  sub.zsub_class = klass;
-  sub.zsub_classinst = instance;
-  sub.zsub_recipient = recipient;
-  return ZUnsubscribeTo(&sub, 1, 0);
+  int one = 1;
+  fprintf(stderr, "%d subscriptions:\n", n);
+  for (int i = 0; i < n; i++) {
+    if ((r = ZGetSubscriptions(&sub, &one)) != ZERR_NONE) {
+      return r;
+    }
+    if (one != 1) {
+      return ZERR_NOMORESUBSCRIPTIONS;
+    }
+    fprintf(stderr, "(%s, %s, %s)\n",
+            sub.zsub_class, sub.zsub_classinst, sub.zsub_recipient);
+  }
+  return ZERR_NONE;
+}
+
+Code_t ensure_subscription(char *klass, char *instance, char *recipient,
+                           int *should_have) {
+  int n;
+  Code_t r;
+  if ((r = ZRetrieveSubscriptions(0, &n)) != ZERR_NONE) {
+    return r;
+  }
+  ZSubscription_t sub;
+  int one = 1;
+  int has = 0;
+  for (int i = 0; i < n; i++) {
+    if ((r = ZGetSubscriptions(&sub, &one)) != ZERR_NONE) {
+      return r;
+    }
+    if (one != 1) {
+      return ZERR_NOMORESUBSCRIPTIONS;
+    }
+    if (strcmp(sub.zsub_class, klass) == 0 &&
+        strcmp(sub.zsub_classinst, instance) == 0 &&
+        strcmp(sub.zsub_recipient, recipient) == 0) {
+      *should_have = 1;
+      return ZERR_NONE;
+    }
+  }
+  *should_have = 0;
+  return ZERR_NONE;
 }
 
 Code_t receive_notice(void) {
