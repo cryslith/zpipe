@@ -2,5 +2,8 @@
 
 all: zpipe
 
-zpipe: zpipe.c util.c
-	c99 -Werror -DKERBEROS $^ -lzephyr -lcom_err -o $@
+zpipe: zpipe.c zpipe.h util.c util.h list.c list.h
+	c99 -Werror -DKERBEROS zpipe.c util.c list.c -lzephyr -lcom_err -o $@
+
+clean:
+	rm -f zpipe

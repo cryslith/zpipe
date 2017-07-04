@@ -97,27 +97,40 @@ class ZNotice(object):
                           time=time)
 
     def to_zpipe(self):
-        return b'\x00'.join([self.charset,
-                             self.sender,
-                             self.cls,
-                             self.instance,
-                             self.recipient,
-                             self.opcode,
-                             b'1' if self.auth else b'0',
-                             str(len(self.message)).encode(),
-                             self.message])
+        return (b''.join(key + b'\x00' + value + b'\x00'
+                         for key, value in
+                         [(b'charset', self.charset),
+                          (b'sender', self.sender),
+                          (b'class', self.cls),
+                          (b'instance', self.instance),
+                          (b'recipient', self.recipient),
+                          (b'opcode', self.opcode),
+                          (b'auth', b'1' if self.auth else b'0'),
+                          (b'message_length',
+                           str(len(self.message)).encode())]) +
+                b'\x00' + self.message)
+
 
     @classmethod
     def from_zpipe(C, f):
-        charset = f.readuntil(0)
-        time = f.readuntil(0)
-        sender = f.readuntil(0)
-        cls = f.readuntil(0)
-        instance = f.readuntil(0)
-        recipient = f.readuntil(0)
-        opcode = f.readuntil(0)
-        auth = int(f.readuntil(0))
-        message_len = int(f.readuntil(0))
+        d = {}
+        while True:
+            key = f.readuntil(0)
+            if not key:
+                break
+            value = f.readuntil(0)
+            d[key] = value
+
+        charset = d[b'charset']
+        time = d[b'timestamp']
+        sender = d[b'sender']
+        cls = d[b'class']
+        instance = d[b'instance']
+        recipient = d[b'recipient']
+        opcode = d[b'opcode']
+        auth = int(d[b'auth'])
+        message_len = int(d[b'message_length'])
+
         message = f.read(message_len)
         return C(charset, sender, cls, instance,
                  recipient, opcode, auth, message,
@@ -194,7 +207,7 @@ class ZPipe(object):
     def zwrite_notice(self, notice):
         self.stdin_lock.acquire()
         try:
-            self.zpipe.stdin.write(b'zwrite\x00')
+            self.zpipe.stdin.write(b'command\x00zwrite\x00\x00')
             self.zpipe.stdin.write(notice.to_zpipe())
             self.zpipe.stdin.flush()
         finally:
@@ -214,10 +227,16 @@ class ZPipe(object):
             recipient = recipient.encode()
         self.stdin_lock.acquire()
         try:
+            self.zpipe.stdin.write(b'command\x00')
+            self.zpipe.stdin.write(b'unsubscribe' if unsub else b'subscribe')
+            self.zpipe.stdin.write(b'\x00\x00')
             self.zpipe.stdin.write(
-                b''.join(x + b'\x00' for x in
-                         (b'unsubscribe' if unsub else b'subscribe',
-                          cls, instance, recipient)))
+                b''.join(key + b'\x00' + value + b'\x00'
+                         for key, value in
+                         [(b'class', cls),
+                          (b'instance', instance),
+                          (b'recipient', recipient)]))
+            self.zpipe.stdin.write(b'\x00')
             self.zpipe.stdin.flush()
         finally:
             self.stdin_lock.release()
@@ -231,14 +250,25 @@ class ZPipe(object):
         self.zephyr_closed = True
         self.stdin_lock.acquire()
         try:
-            self.zpipe.stdin.write(b'close_zephyr\x00')
+            self.zpipe.stdin.write(b'command\x00close_zephyr\x00\x00')
             self.zpipe.stdin.flush()
         finally:
             self.stdin_lock.release()
 
     def zpipe_listen_notice(self, notice_handler):
         while True:
-            typ = self.zpipe_out.readuntil(0)
+            d = {}
+            while True:
+                key = self.zpipe_out.readuntil(0)
+                if not key:
+                    break
+                value = self.zpipe_out.readuntil(0)
+                d[key] = value
+            try:
+                typ = d[b'type']
+            except KeyError:
+                # no type = EOF
+                return
             if typ == b'notice':
                 t = Thread(target=notice_handler,
                            args=(self, ZNotice.from_zpipe(self.zpipe_out)))
@@ -248,7 +278,18 @@ class ZPipe(object):
 
     def zpipe_listen_zgram(self, zgram_handler):
         while True:
-            typ = self.zpipe_out.readuntil(0)
+            d = {}
+            while True:
+                key = self.zpipe_out.readuntil(0)
+                if not key:
+                    break
+                value = self.zpipe_out.readuntil(0)
+                d[key] = value
+            try:
+                typ = d[b'type']
+            except KeyError:
+                # no type = EOF
+                return
             if typ == b'notice':
                 try:
                     zgram = ZNotice.from_zpipe(self.zpipe_out).to_zephyrgram()

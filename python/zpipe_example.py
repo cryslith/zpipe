@@ -8,6 +8,7 @@ repeated = False
 def repeat(zp, zgram):
     global repeated
     print(zgram)
+    print('hi')
     if repeated:
         return
     repeated = True
