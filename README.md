@@ -82,9 +82,12 @@ The following syntax is emitted on standard output:
 
     <output keys><output body>
 
-where `<output keys>` is a key-value list containing only the key
-`type`, which specifies the type of output message.  Valid types are
-`notice`.
+where `<output keys>` is a key-value list containing the following keys:
+
+* `type`: the type of output; current existing types are `notice`
+* `length`: the length of the output body
+
+Programs should ignore outputs whose types they do not understand.
 
 ## notice
 

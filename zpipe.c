@@ -466,18 +466,32 @@ Code_t process_notice(ZNotice_t *notice, struct sockaddr_in *from) {
       notice->z_kind == ACKED) {
     Code_t authed = ZCheckAuthentication(notice, from);
 
-    printf("type%cnotice%c%c", 0, 0, 0);
-    printf("charset%c%s%c", 0, ZCharsetToString(notice->z_charset), 0);
-    printf("timestamp%c%u:%u%c", 0,
-           notice->z_time.tv_sec, notice->z_time.tv_usec, 0);
-    printf("sender%c%s%c", 0, notice->z_sender, 0);
-    printf("class%c%s%c", 0, notice->z_class, 0);
-    printf("instance%c%s%c", 0, notice->z_class_inst, 0);
-    printf("recipient%c%s%c", 0, notice->z_recipient, 0);
-    printf("opcode%c%s%c", 0, notice->z_opcode, 0);
-    printf("auth%c%u%c", 0, authed == ZAUTH_YES, 0);
-    printf("message_length%c%u%c", 0, notice->z_message_len, 0);
+    int len = 0;
+
+#define PROCESS_NOTICE_KEYS(PRINTF) do {                                \
+    PRINTF("charset%c%s%c", 0, ZCharsetToString(notice->z_charset), 0); \
+    PRINTF("timestamp%c%u:%u%c", 0,                                     \
+           notice->z_time.tv_sec, notice->z_time.tv_usec, 0);           \
+    PRINTF("sender%c%s%c", 0, notice->z_sender, 0);                     \
+    PRINTF("class%c%s%c", 0, notice->z_class, 0);                       \
+    PRINTF("instance%c%s%c", 0, notice->z_class_inst, 0);               \
+    PRINTF("recipient%c%s%c", 0, notice->z_recipient, 0);               \
+    PRINTF("opcode%c%s%c", 0, notice->z_opcode, 0);                     \
+    PRINTF("auth%c%u%c", 0, authed == ZAUTH_YES, 0);                    \
+    PRINTF("message_length%c%u%c", 0, notice->z_message_len, 0);        \
+    PRINTF("%c", 0);                                                    \
+  } while (0)
+
+#define P_N_ADD_LEN(...) len += snprintf(NULL, 0, __VA_ARGS__)
+
+    PROCESS_NOTICE_KEYS(P_N_ADD_LEN);
+    len += notice->z_message_len;
+
+    printf("type%cnotice%c", 0, 0);
+    printf("length%c%d%c", 0, len, 0);
     printf("%c", 0);
+
+    PROCESS_NOTICE_KEYS(printf);
     fwrite(notice->z_message, 1, notice->z_message_len, stdout);
     fflush(stdout);
   }

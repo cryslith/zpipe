@@ -263,29 +263,16 @@ class ZPipe(object):
                 t = Thread(target=notice_handler,
                            args=(self, ZNotice.from_zpipe(self.zpipe_out)))
                 t.start()
-            else:
-                break
+                continue
+            # unknown type - ignore
+            self.zpipe_out.read(int(d[b'length']))
 
     def zpipe_listen_zgram(self, zgram_handler):
-        while True:
-            d = {}
-            while True:
-                key = self.zpipe_out.readuntil(0)
-                if not key:
-                    break
-                value = self.zpipe_out.readuntil(0)
-                d[key] = value
+        def notice_handler(s, notice):
             try:
-                typ = d[b'type']
-            except KeyError:
-                # no type = EOF
+                zgram = notice.to_zephyrgram()
+            except ValueError:
+                # ignore decoding errors
                 return
-            if typ == b'notice':
-                try:
-                    zgram = ZNotice.from_zpipe(self.zpipe_out).to_zephyrgram()
-                except ValueError:
-                    continue
-                t = Thread(target=zgram_handler, args=(self, zgram))
-                t.start()
-            else:
-                break
+            zgram_handler(s, zgram)
+        self.zpipe_listen_notice(notice_handler)
