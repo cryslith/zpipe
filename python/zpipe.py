@@ -202,6 +202,12 @@ class ZPipe(object):
         self.closed = False
         self.stdin_lock = Lock()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *err):
+        self.close()
+
     def zwrite_notice(self, notice):
         if self.closed:
             raise ValueError('zwrite to closed zpipe')

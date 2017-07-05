@@ -22,14 +22,13 @@ def repeat(zp, zgram):
 
 
 def main():
-    zp = ZPipe(['../zpipe'], repeat)
-    zp.subscribe('zpipe-example', 'example')
-    for i in range(3):
-        text = input('enter a message ({}/3) > '.format(i + 1))
-        zp.zwrite(Zephyrgram(None, 'zpipe-example', 'example', None,
-                             'zpipe-example', True,
-                             ['zpipe example {}/3'.format(i + 1), text]))
-    zp.close()
+    with ZPipe(['../zpipe'], repeat) as zp:
+        zp.subscribe('zpipe-example', 'example')
+        for i in range(3):
+            text = input('enter a message ({}/3) > '.format(i + 1))
+            zp.zwrite(Zephyrgram(None, 'zpipe-example', 'example', None,
+                                 'zpipe-example', True,
+                                 ['zpipe example {}/3'.format(i + 1), text]))
     return 0
 
 if __name__ == '__main__':
