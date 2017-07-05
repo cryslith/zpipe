@@ -4,12 +4,25 @@ from threading import Thread, Lock
 
 
 class ReadUntil(object):
+    '''
+    Input stream wrapper to facilitate reading until a sentinel value is
+    seen
+    '''
+
     def __init__(self, reader, readsize=DEFAULT_BUFFER_SIZE):
+        '''
+        reader: a BufferedIOBase stream to wrap
+        readsize: the number of bytes to read into the buffer at once
+        '''
         self.reader = reader
         self.buffer = []
         self.readsize = readsize
 
-    def more(self, c=None):
+    def _more(self, c=None):
+        '''
+        read more data into the buffer, returning the new location of c
+        if it appears in the new data
+        '''
         curlen = len(self.buffer)
         m = self.reader.read1(self.readsize)
         if not m:
@@ -21,6 +34,10 @@ class ReadUntil(object):
                     return curlen + i
 
     def readuntil(self, c, strip=True):
+        '''
+        Read until c is found, returning the resulting data.  If strip
+        is false, include the delimiter if one was found.
+        '''
         for i, b in enumerate(self.buffer):
             if b == c:
                 break
@@ -28,7 +45,7 @@ class ReadUntil(object):
             i = None
         while i is None:
             try:
-                i = self.more(c)
+                i = self._more(c)
             except EOFError:
                 return self.read(len(self.buffer))
         result = self.read(i + 1)
@@ -37,9 +54,10 @@ class ReadUntil(object):
         return result
 
     def read(self, n):
+        '''Read and return n bytes.'''
         while n > len(self.buffer):
             try:
-                self.more()
+                self._more()
             except EOFError:
                 result = self.buffer[:]
                 self.buffer = []
@@ -79,6 +97,10 @@ class ZNotice(object):
         self.time = time
 
     def to_zephyrgram(self):
+        '''
+        Decode the notice into a Zephyrgram, possibly resulting in
+        decoding errors.
+        '''
         encoding = {b'UTF-8': 'utf-8',
                     b'ISO-8859-1': 'latin-1'}.get(self.charset, 'ascii')
         if self.time is None:
@@ -96,7 +118,8 @@ class ZNotice(object):
                            self.message.split(b'\x00')],
                           time=time)
 
-    def to_zpipe(self):
+    def _to_zpipe(self):
+        '''Serialize the notice for sending to a zpipe.'''
         return (b''.join(key + b'\x00' + value + b'\x00'
                          for key, value in
                          [(b'charset', self.charset),
@@ -111,13 +134,14 @@ class ZNotice(object):
                 b'\x00' + self.message)
 
     @classmethod
-    def from_zpipe(C, f):
+    def _from_zpipe(C, zp):
+        '''Read a notice from an open zpipe.'''
         d = {}
         while True:
-            key = f.readuntil(0)
+            key = zp.zpipe_out.readuntil(0)
             if not key:
                 break
-            value = f.readuntil(0)
+            value = zp.zpipe_out.readuntil(0)
             d[key] = value
 
         charset = d[b'charset']
@@ -130,7 +154,7 @@ class ZNotice(object):
         auth = int(d[b'auth'])
         message_len = int(d[b'message_length'])
 
-        message = f.read(message_len)
+        message = zp.zpipe_out.read(message_len)
         return C(charset, sender, cls, instance,
                  recipient, opcode, auth, message,
                  time=time)
@@ -172,6 +196,7 @@ class Zephyrgram(object):
                                         time=self.time))
 
     def to_znotice(self):
+        '''Encode the zephyrgram into a ZNotice.'''
         if self.time is None:
             time = None
         else:
@@ -195,7 +220,7 @@ class ZPipe(object):
     def __init__(self, args, handler, raw=False):
         self.zpipe = Popen(args, stdin=PIPE, stdout=PIPE)
         self.zpipe_out = ReadUntil(self.zpipe.stdout)
-        target = self.zpipe_listen_notice if raw else self.zpipe_listen_zgram
+        target = self._zpipe_listen_notice if raw else self._zpipe_listen_zgram
         self.stdout_thread = Thread(target=target, args=(handler,))
         self.stdout_thread.start()
         self.zephyr_closed = False
@@ -209,17 +234,20 @@ class ZPipe(object):
         self.close()
 
     def zwrite_notice(self, notice):
+        '''Send a ZNotice to the zpipe.'''
         if self.closed:
             raise ValueError('zwrite to closed zpipe')
         with self.stdin_lock:
             self.zpipe.stdin.write(b'command\x00zwrite\x00\x00')
-            self.zpipe.stdin.write(notice.to_zpipe())
+            self.zpipe.stdin.write(notice._to_zpipe())
             self.zpipe.stdin.flush()
 
     def zwrite(self, zgram):
+        '''Send a Zephyrgram to the zpipe.'''
         self.zwrite_notice(zgram.to_znotice())
 
     def subscribe(self, cls, instance='*', recipient='*', unsub=False):
+        '''Add a subscription.'''
         if self.zephyr_closed:
             raise ValueError('zephyr closed')
         if isinstance(cls, str):
@@ -242,9 +270,11 @@ class ZPipe(object):
             self.zpipe.stdin.flush()
 
     def unsubscribe(self, *args):
+        '''Remove a subscription.'''
         self.subscribe(*args, unsub=True)
 
     def close_zephyr(self):
+        '''Close the zpipe's output stream.'''
         if self.zephyr_closed:
             return
         with self.stdin_lock:
@@ -254,6 +284,7 @@ class ZPipe(object):
         self.zephyr_closed = True
 
     def close(self):
+        '''Close the zpipe.'''
         if self.closed:
             return
         self.close_zephyr()
@@ -261,7 +292,7 @@ class ZPipe(object):
             self.zpipe.stdin.close()
         self.closed = True
 
-    def zpipe_listen_notice(self, notice_handler):
+    def _zpipe_listen_notice(self, notice_handler):
         while True:
             d = {}
             while True:
@@ -277,13 +308,13 @@ class ZPipe(object):
                 return
             if typ == b'notice':
                 t = Thread(target=notice_handler,
-                           args=(self, ZNotice.from_zpipe(self.zpipe_out)))
+                           args=(self, ZNotice._from_zpipe(self)))
                 t.start()
                 continue
             # unknown type - ignore
             self.zpipe_out.read(int(d[b'length']))
 
-    def zpipe_listen_zgram(self, zgram_handler):
+    def _zpipe_listen_zgram(self, zgram_handler):
         def notice_handler(s, notice):
             try:
                 zgram = notice.to_zephyrgram()
@@ -291,4 +322,7 @@ class ZPipe(object):
                 # ignore decoding errors
                 return
             zgram_handler(s, zgram)
-        self.zpipe_listen_notice(notice_handler)
+        self._zpipe_listen_notice(notice_handler)
+
+
+__all__ = ['ZNotice', 'Zephyrgram', 'ZPipe']
