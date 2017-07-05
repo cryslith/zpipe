@@ -218,6 +218,17 @@ class Zephyrgram(object):
 
 class ZPipe(object):
     def __init__(self, args, handler, raw=False):
+        '''
+        Create and open a zpipe.
+
+        Arguments:
+        args -- A list of arguments with which to invoke the zpipe
+                program.  The first should be a path to the zpipe
+                binary.
+        handler -- A function to be called with each incoming zephyr
+        raw -- Call the handler with raw ZNotice objects instead of
+               Zephyrgrams
+        '''
         self.zpipe = Popen(args, stdin=PIPE, stdout=PIPE)
         self.zpipe_out = ReadUntil(self.zpipe.stdout)
         target = self._zpipe_listen_notice if raw else self._zpipe_listen_zgram
