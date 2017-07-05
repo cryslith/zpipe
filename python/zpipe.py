@@ -193,17 +193,18 @@ class Zephyrgram(object):
 
 class ZPipe(object):
     def __init__(self, args, handler, raw=False):
-        self.handler = handler
-        self.raw = raw
         self.zpipe = Popen(args, stdin=PIPE, stdout=PIPE)
         self.zpipe_out = ReadUntil(self.zpipe.stdout)
         target = self.zpipe_listen_notice if raw else self.zpipe_listen_zgram
         self.stdout_thread = Thread(target=target, args=(handler,))
         self.stdout_thread.start()
         self.zephyr_closed = False
+        self.closed = False
         self.stdin_lock = Lock()
 
     def zwrite_notice(self, notice):
+        if self.closed:
+            raise ValueError('zwrite to closed zpipe')
         with self.stdin_lock:
             self.zpipe.stdin.write(b'command\x00zwrite\x00\x00')
             self.zpipe.stdin.write(notice.to_zpipe())
@@ -240,10 +241,19 @@ class ZPipe(object):
     def close_zephyr(self):
         if self.zephyr_closed:
             return
-        self.zephyr_closed = True
         with self.stdin_lock:
             self.zpipe.stdin.write(b'command\x00close_zephyr\x00\x00')
             self.zpipe.stdin.flush()
+        self.stdout_thread.join()
+        self.zephyr_closed = True
+
+    def close(self):
+        if self.closed:
+            return
+        self.close_zephyr()
+        with self.stdin_lock:
+            self.zpipe.stdin.close()
+        self.closed = True
 
     def zpipe_listen_notice(self, notice_handler):
         while True:

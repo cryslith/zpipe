@@ -29,7 +29,7 @@ def main():
         zp.zwrite(Zephyrgram(None, 'zpipe-example', 'example', None,
                              'zpipe-example', True,
                              ['zpipe example {}/3'.format(i + 1), text]))
-    zp.close_zephyr()
+    zp.close()
     return 0
 
 if __name__ == '__main__':
