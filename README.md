@@ -116,6 +116,16 @@ The above keys will always be present, but it is possible that other
 keys will be present also.  Programs should ignore unexpected keys.
 `message` will have the length specified in `message_length`.
 
+## error
+
+The output type `error` is emitted when an error occurs in zephyr
+operations.  Its body is a key-value list containing at least the
+following keys:
+
+* `operation`: (optional) An identifier of the operation being performed
+  when the error occurred.
+* `message`: The error message
+
 # Authorship
 
 `zpipe` copyright 2017 ikdc <ikdc@mit.edu>

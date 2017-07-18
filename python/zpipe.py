@@ -1,6 +1,7 @@
 from subprocess import Popen, PIPE
 from io import DEFAULT_BUFFER_SIZE
 from threading import Thread, Lock
+import sys
 
 
 class ReadUntil(object):
@@ -65,6 +66,16 @@ class ReadUntil(object):
         result = self.buffer[:n]
         self.buffer = self.buffer[n:]
         return bytes(result)
+
+    def read_kv(self):
+        d = {}
+        while True:
+            key = self.readuntil(0)
+            if not key:
+                break
+            value = self.readuntil(0)
+            d[key] = value
+        return d
 
 
 class ZNotice(object):
@@ -137,13 +148,7 @@ class ZNotice(object):
     @classmethod
     def _from_zpipe(C, zp):
         '''Read a notice from an open zpipe.'''
-        d = {}
-        while True:
-            key = zp.zpipe_out.readuntil(0)
-            if not key:
-                break
-            value = zp.zpipe_out.readuntil(0)
-            d[key] = value
+        d = zp.zpipe_out.read_kv()
 
         charset = d[b'charset']
         time = d[b'timestamp']
@@ -217,8 +222,23 @@ class Zephyrgram(object):
                        time=time)
 
 
+class ZephyrError(Exception):
+    def __init__(self, operation=None, message=None):
+        self.operation = operation
+        self.message = message
+
+    def __str__(self):
+        return '{}: {} while {}'.format(type(self).__name__,
+                                        self.message, self.operation)
+
+    def __repr__(self):
+        return ('{}({!r}, operation={!r}, message={!r})'.format(
+                type(self).__name__, self.operation, self.message))
+
+
 class ZPipe(object):
-    def __init__(self, args, handler, raw=False):
+    def __init__(self, args, handler=None, error_handler=None,
+                 raw=False):
         '''
         Create and open a zpipe.
 
@@ -233,7 +253,12 @@ class ZPipe(object):
         self.zpipe = Popen(args, stdin=PIPE, stdout=PIPE)
         self.zpipe_out = ReadUntil(self.zpipe.stdout)
         target = self._zpipe_listen_notice if raw else self._zpipe_listen_zgram
-        self.stdout_thread = Thread(target=target, args=(handler,))
+        if handler is None:
+            handler = lambda _: None
+        if error_handler is None:
+            error_handler = lambda e: print(e, file=sys.stderr)
+        self.stdout_thread = Thread(target=target,
+                                    args=(handler, error_handler))
         self.stdout_thread.start()
         self.zephyr_closed = False
         self.closed = False
@@ -304,15 +329,9 @@ class ZPipe(object):
             self.zpipe.stdin.close()
         self.closed = True
 
-    def _zpipe_listen_notice(self, notice_handler):
+    def _zpipe_listen_notice(self, notice_handler, error_handler):
         while True:
-            d = {}
-            while True:
-                key = self.zpipe_out.readuntil(0)
-                if not key:
-                    break
-                value = self.zpipe_out.readuntil(0)
-                d[key] = value
+            d = self.zpipe_out.read_kv()
             try:
                 typ = d[b'type']
             except KeyError:
@@ -323,10 +342,16 @@ class ZPipe(object):
                            args=(self, ZNotice._from_zpipe(self)))
                 t.start()
                 continue
+            if typ == b'error':
+                e = self.zpipe_out.read_kv()
+                error_handler(ZephyrError(
+                        operation=e.get(b'operation').decode(),
+                        message=e.get(b'message').decode()))
+                continue
             # unknown type - ignore
             self.zpipe_out.read(int(d[b'length']))
 
-    def _zpipe_listen_zgram(self, zgram_handler):
+    def _zpipe_listen_zgram(self, zgram_handler, error_handler):
         def notice_handler(s, notice):
             try:
                 zgram = notice.to_zephyrgram()
@@ -334,7 +359,7 @@ class ZPipe(object):
                 # ignore decoding errors
                 return
             zgram_handler(s, zgram)
-        self._zpipe_listen_notice(notice_handler)
+        self._zpipe_listen_notice(notice_handler, error_handler)
 
 
-__all__ = ['ZNotice', 'Zephyrgram', 'ZPipe']
+__all__ = ['ZNotice', 'Zephyrgram', 'ZPipe', 'ZephyrError']

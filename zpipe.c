@@ -16,27 +16,33 @@
 #include "list.h"
 
 
-#define CHECK_ZERR(X, ONERROR) do {               \
-    Code_t status = X;                            \
-    if (status != ZERR_NONE) {                    \
-      com_err("zpipe", status, #X);               \
-      goto ONERROR;                               \
-    }                                             \
+#define ASSERT_ZERR(X) do {                           \
+    Code_t status = X;                                \
+    if (status != ZERR_NONE) {                        \
+      com_err("zpipe", status, "calling %s at %s:%u", \
+              #X, __FILE__, __LINE__);                \
+      exit(1);                                        \
+    }                                                 \
   } while (0)
 
-#define ERROR(...) error_at_line(0, 0, __FILE__, __LINE__, __VA_ARGS__)
-
-
-#define PARSE_ARG(ARG, KEY, CONTINUE, ONERROR) do {   \
-    if (strcmp(ARG->arg_key, #KEY) == 0) {            \
-      if (KEY != NULL) {                              \
-        ERROR("duplicate key: " #KEY "\n");           \
-        goto ONERROR;                                 \
+#define PARSE_ARG(ARG, KEY, CONTINUE) do {            \
+      if (strcmp((ARG)->arg_key, #KEY) == 0) {        \
+        if (KEY != NULL) {                            \
+          ERROR("duplicate key: " #KEY "\n");         \
+        }                                             \
+        KEY = (ARG)->arg_value;                       \
+        goto CONTINUE;                                \
       }                                               \
-      KEY = ARG->arg_value;                           \
-      goto CONTINUE;                                  \
-    }                                                 \
   } while (0)                                         \
+
+
+Code_t write_zerr(Code_t err, char *operation) {
+  if (err != ZERR_NONE) {
+    send_err(operation, error_message(err));
+  }
+  return err;
+}
+
 
 typedef struct _arg {
   char *arg_key;
@@ -55,44 +61,30 @@ void arg_list_free(list args) {
 }
 
 
-/* Returns a list arg, all of whose substructures must be free()d.  Sets
- * *error to nonzero on error
+/* Returns a list arg, all of whose substructures must be free()d.
  */
-list collect_arguments(int *error) {
+list collect_arguments() {
   ssize_t r, n;
   list tmp, acc = nil;
   char *key, *value;
   arg a;
   for (;;) {
     n = 0;
-    if ((r = getdelim_unbuf(&key, &n, 0, STDIN_FILENO)) < 0) {
-      *error = -1;
-      return acc;
-    }
+    getdelim_unbuf(&key, &n, 0, STDIN_FILENO);
     if (strlen(key) == 0) {
-      *error = 0;
       return acc;
     }
     n = 0;
     if ((r = getdelim_unbuf(&value, &n, 0, STDIN_FILENO)) < 0) {
-      free(key);
-      *error = -1;
-      return acc;
+      ERROR("eof reading value");
     }
     if ((a = malloc(sizeof(_arg))) == NULL) {
-      free(value);
-      free(key);
-      *error = -1;
-      return acc;
+      ERROR("malloc returned null");
     }
     a->arg_key = key;
     a->arg_value = value;
     if ((tmp = cons(a, acc)) == nil) {
-      free(acc);
-      free(value);
-      free(key);
-      *error = -1;
-      return acc;
+      ERROR("cons returned nil");
     }
     acc = tmp;
   }
@@ -109,9 +101,11 @@ void debug_arguments(list args) {
 int main(void) {
   int r;
 
-  CHECK_ZERR(ZInitialize(), main_error);
+  ASSERT_ZERR(ZInitialize());
 
-  CHECK_ZERR(ZSubscribeToSansDefaults(NULL, 0, 0), main_error);
+  int subscribed = 0;
+
+  write_zerr(ZSubscribeToSansDefaults(NULL, 0, 0), "initializing");
 
   int zfd = ZGetFD();
   int infd = STDIN_FILENO;
@@ -135,95 +129,68 @@ int main(void) {
       error_at_line(1, errno, __FILE__, __LINE__, "error on select");
     }
     if (FD_ISSET(infd, &readfds)) {
-      int cont, close_zephyr;
-      if ((r = receive_stdin(&cont, &close_zephyr)) != 0) {
-        return r;
-      }
-      if (!cont) {
+      int close_zephyr;
+      if (!receive_stdin(&close_zephyr)) {
         close(infd);
         infd = -1;
       }
       if (close_zephyr) {
-        CHECK_ZERR(ZCancelSubscriptions(0), main_error);
+        write_zerr(ZCancelSubscriptions(0), "closing zephyr");
         zfd = -1;
         fclose(stdout);
       }
     }
     if (FD_ISSET(zfd, &readfds)) {
-      CHECK_ZERR(receive_notice(), main_error);
+      write_zerr(receive_notice(), "receiving notice");
     }
   }
- main_error:
-  return -1;
 }
 
-int receive_stdin(int *cont, int *close_zephyr) {
-  *cont = 0;
+// returns 0 on eof
+int receive_stdin(int *close_zephyr) {
   *close_zephyr = 0;
 
-  int error = 0;
-  list args = collect_arguments(&error);
-  if (error) {
-    ERROR("error collecting arguments\n");
-    goto stdin_done;
-  }
+  list args = collect_arguments();
 
   char *command = NULL;
   for (list l = args; l != nil; l = tail(l)) {
     arg a = head(l);
-    PARSE_ARG(a, command, stdin_args_cont, stdin_args_err);
+    PARSE_ARG(a, command, stdin_args_cont);
 
     ERROR("unknown key %s\n", a->arg_key);
-  stdin_args_err:
-    error = 1;
-    goto stdin_done;
   stdin_args_cont:;
   }
 
+  int cont = 1;
   if (command == NULL) {
-    // no command = EOF
+    cont = 0;
     goto stdin_done;
   }
   if (strcmp(command, "zwrite") == 0) {
-    if ((error = receive_zwrite()) == 0) {
-      *cont = 1;
-    }
+    receive_zwrite();
     goto stdin_done;
   }
   if (strcmp(command, "subscribe") == 0) {
-    if ((error = receive_subscription(1)) == 0) {
-      *cont = 1;
-    }
+    receive_subscription(1);
     goto stdin_done;
   }
   if (strcmp(command, "unsubscribe") == 0) {
-    if ((error = receive_subscription(0)) == 0) {
-      *cont = 1;
-    }
+    receive_subscription(0);
     goto stdin_done;
   }
   if (strcmp(command, "close_zephyr") == 0) {
     *close_zephyr = 1;
-    *cont = 1;
     goto stdin_done;
   }
   ERROR("unknown command\n");
 
- stdin_error:
-  error = 1;
  stdin_done:
   arg_list_free(args);
-  return error;
+  return cont;
 }
 
-int receive_zwrite(void) {
-  int error = 0;
-
-  list args = collect_arguments(&error);
-  if (error) {
-    ERROR("error collecting arguments\n");
-    goto receive_zwrite_free_args;
-  }
+void receive_zwrite(void) {
+  list args = collect_arguments();
 
   char *charset = NULL;
   char *sender = NULL;
@@ -235,19 +202,16 @@ int receive_zwrite(void) {
   char *message_length = NULL;
   for (list l = args; l != nil; l = tail(l)) {
     arg a = head(l);
-    PARSE_ARG(a, charset, zwrite_args_cont, zwrite_args_err);
-    PARSE_ARG(a, sender, zwrite_args_cont, zwrite_args_err);
-    PARSE_ARG(a, class, zwrite_args_cont, zwrite_args_err);
-    PARSE_ARG(a, instance, zwrite_args_cont, zwrite_args_err);
-    PARSE_ARG(a, recipient, zwrite_args_cont, zwrite_args_err);
-    PARSE_ARG(a, opcode, zwrite_args_cont, zwrite_args_err);
-    PARSE_ARG(a, auth, zwrite_args_cont, zwrite_args_err);
-    PARSE_ARG(a, message_length, zwrite_args_cont, zwrite_args_err);
+    PARSE_ARG(a, charset, zwrite_args_cont);
+    PARSE_ARG(a, sender, zwrite_args_cont);
+    PARSE_ARG(a, class, zwrite_args_cont);
+    PARSE_ARG(a, instance, zwrite_args_cont);
+    PARSE_ARG(a, recipient, zwrite_args_cont);
+    PARSE_ARG(a, opcode, zwrite_args_cont);
+    PARSE_ARG(a, auth, zwrite_args_cont);
+    PARSE_ARG(a, message_length, zwrite_args_cont);
 
     ERROR("unknown zwrite key %s\n", a->arg_key);
-  zwrite_args_err:
-    error = 1;
-    goto receive_zwrite_free_args;
   zwrite_args_cont:;
   }
 
@@ -281,32 +245,21 @@ int receive_zwrite(void) {
   if (mlen) {
     if (!(message = malloc(mlen))) {
       ERROR("error malloc()ing for message\n");
-      error = 1;
-      goto receive_zwrite_free_args;
     }
     if (read_all(STDIN_FILENO, message, mlen) < mlen) {
       ERROR("unexpected EOF reading message\n");
-      error = 1;
-      goto receive_zwrite_free_message;
     }
   }
 
-  CHECK_ZERR(zwrite(ZGetCharset(charset),
+  write_zerr(zwrite(ZGetCharset(charset),
                     sender, class, instance, recipient, opcode,
                     mlen, message, atoi(auth)),
-             receive_zwrite_error);
+             "zwriting");
 
-  if (0) {
-  receive_zwrite_error:
-    error = 1;
-  }
- receive_zwrite_free_message:
   if (message) {
     free(message);
   }
- receive_zwrite_free_args:
   arg_list_free(args);
-  return error;
 }
 
 Code_t zwrite(unsigned short charset,
@@ -332,32 +285,24 @@ Code_t zwrite(unsigned short charset,
   return ZSendNotice(&notice, auth ? ZAUTH : ZNOAUTH);
 }
 
-int receive_subscription(int should_sub) {
-  int error = 0;
-
-  list args = collect_arguments(&error);
-  if (error) {
-    ERROR("error collecting arguments\n");
-    goto receive_sub_error;
-  }
+void receive_subscription(int should_sub) {
+  list args = collect_arguments();
 
   char *class = NULL;
   char *instance = NULL;
   char *recipient = NULL;
   for (list l = args; l != nil; l = tail(l)) {
     arg a = head(l);
-    PARSE_ARG(a, class, sub_args_cont, receive_sub_error);
-    PARSE_ARG(a, instance, sub_args_cont, receive_sub_error);
-    PARSE_ARG(a, recipient, sub_args_cont, receive_sub_error);
+    PARSE_ARG(a, class, sub_args_cont);
+    PARSE_ARG(a, instance, sub_args_cont);
+    PARSE_ARG(a, recipient, sub_args_cont);
 
     ERROR("unknown subscription key %s\n", a->arg_key);
-    goto receive_sub_error;
   sub_args_cont:;
   }
 
   if (!class) {
     ERROR("no class specified\n");
-    goto receive_sub_error;
   }
   if (!instance) {
     instance = "*";
@@ -367,22 +312,15 @@ int receive_subscription(int should_sub) {
   }
 
   int success = 0;
-  CHECK_ZERR(subscribe(class, instance, recipient, should_sub, &success),
-             receive_sub_error);
-  if (!success) {
-    ERROR("subscription attempt failed: (%s, %s, %s)\n",
-            class, instance, recipient);
-    error = 1;
-    goto receive_sub_error;
+  if (write_zerr(subscribe(class, instance, recipient, should_sub,
+                           &success),
+                 "changing subscriptions") == ZERR_NONE) {
+    if (!success) {
+      send_err("changing subscriptions", "subscriptions did not change");
+    }
   }
 
-  if (0) {
-  receive_sub_error:
-    error = 1;
-  }
- receive_sub_free_args:
   arg_list_free(args);
-  return error;
 }
 
 Code_t subscribe(char *class, char *instance, char *recipient, int should_sub,
@@ -407,19 +345,17 @@ Code_t subscribe(char *class, char *instance, char *recipient, int should_sub,
 
 void debug_subscriptions() {
   int n;
-  CHECK_ZERR(ZRetrieveSubscriptions(0, &n), debug_subscriptions_end);
+  ASSERT_ZERR(ZRetrieveSubscriptions(0, &n));
 
   ZSubscription_t sub;
   int one = 1;
   fprintf(stderr, "%d subscriptions:\n", n);
   for (int i = 0; i < n; i++) {
     one = 1;
-    CHECK_ZERR(ZGetSubscriptions(&sub, &one), debug_subscriptions_end);
+    ASSERT_ZERR(ZGetSubscriptions(&sub, &one));
     fprintf(stderr, "(%s, %s, %s)\n",
             sub.zsub_class, sub.zsub_classinst, sub.zsub_recipient);
   }
-  debug_subscriptions_end:
-  return;
 }
 
 Code_t ensure_subscription(char *class, char *instance, char *recipient,
@@ -457,16 +393,15 @@ Code_t receive_notice(void) {
   if ((status = ZReceiveNotice(&notice, &from)) != ZERR_NONE) {
     return status;
   }
-  return process_notice(&notice, &from);
+  process_notice(&notice, &from);
+  return ZERR_NONE;
 }
 
-Code_t process_notice(ZNotice_t *notice, struct sockaddr_in *from) {
+void process_notice(ZNotice_t *notice, struct sockaddr_in *from) {
   if (notice->z_kind == UNSAFE ||
       notice->z_kind == UNACKED ||
       notice->z_kind == ACKED) {
     Code_t authed = ZCheckAuthentication(notice, from);
-
-    int len = 0;
 
 #define PROCESS_NOTICE_KEYS(PRINTF) do {                                \
     PRINTF("charset%c%s%c", 0, ZCharsetToString(notice->z_charset), 0); \
@@ -482,6 +417,7 @@ Code_t process_notice(ZNotice_t *notice, struct sockaddr_in *from) {
     PRINTF("%c", 0);                                                    \
   } while (0)
 
+    int len = 0;
 #define P_N_ADD_LEN(...) len += snprintf(NULL, 0, __VA_ARGS__)
 
     PROCESS_NOTICE_KEYS(P_N_ADD_LEN);
@@ -496,6 +432,26 @@ Code_t process_notice(ZNotice_t *notice, struct sockaddr_in *from) {
     fflush(stdout);
   }
   ZFreeNotice(notice);
+}
 
-  return ZERR_NONE;
+void send_err(char *operation, const char *err) {
+#define SEND_ERR_KEYS(PRINTF) do {                                      \
+    if (operation) {                                                    \
+      PRINTF("operation%c%s%c", 0, operation, 0);                       \
+    }                                                                   \
+    PRINTF("message%c%s%c", 0, err, 0);                                 \
+    PRINTF("%c", 0);                                                    \
+  } while (0)
+
+  int len = 0;
+#define S_E_ADD_LEN(...) len += snprintf(NULL, 0, __VA_ARGS__)
+
+  SEND_ERR_KEYS(S_E_ADD_LEN);
+
+  printf("type%cerror%c", 0, 0);
+  printf("length%c%d%c", 0, len, 0);
+  printf("%c", 0);
+
+  SEND_ERR_KEYS(printf);
+  fflush(stdout);
 }

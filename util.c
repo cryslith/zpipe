@@ -1,6 +1,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <error.h>
+
+#include "util.h"
 
 #define GETDELIM_BUFFER_SIZE 120
 
@@ -9,29 +12,28 @@ int max(int a, int b) {
   return (a > b) ? a : b;
 }
 
-ssize_t getdelim_unbuf(char **lineptr, size_t *n, int delim, int fd) {
+size_t getdelim_unbuf(char **lineptr, size_t *n, int delim, int fd) {
   if (lineptr == NULL || n == NULL) {
-    return -1;
+    ERROR("lineptr and n must not be null!");
   }
 
   if (*lineptr == NULL || *n == 0) {
     if ((*lineptr = malloc(*n = GETDELIM_BUFFER_SIZE)) == NULL) {
-      return -1;
+      ERROR("malloc returned null");
     }
   }
-  ssize_t head = 0;
+  size_t head = 0;
 
   for (;;) {
     if (head + 1 >= *n) {
       if ((*lineptr = realloc(*lineptr, (*n = *n * 2 + 1))) == NULL) {
-        return -1;
+        ERROR("realloc returned null");
       }
     }
 
     int r;
     if ((r = read(fd, *lineptr + head, 1)) < 0) {
-      free(*lineptr);
-      return -1;
+      ERROR("read error");
     }
     if (r == 0 || (*lineptr)[head++] == delim) {
       (*lineptr)[head++] = '\0';
