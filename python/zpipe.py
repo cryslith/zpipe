@@ -87,10 +87,10 @@ class ZNotice(object):
                 microseconds since the last second
         '''
         self.charset = charset
-        self.sender = b'' if sender is None else sender
+        self.sender = sender
         self.cls = cls
         self.instance = instance
-        self.recipient = b'' if recipient is None else recipient
+        self.recipient = recipient
         self.opcode = opcode
         self.auth = auth
         self.message = message
@@ -130,7 +130,8 @@ class ZNotice(object):
                           (b'opcode', self.opcode),
                           (b'auth', b'1' if self.auth else b'0'),
                           (b'message_length',
-                           str(len(self.message)).encode())]) +
+                           str(len(self.message)).encode())]
+                         if value is not None) +
                 b'\x00' + self.message)
 
     @classmethod
